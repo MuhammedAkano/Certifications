@@ -1,0 +1,1931 @@
+---
+title: "Document Clustering"
+output: html_notebook
+---
+
+ Just 193 courses
+```{r}
+library(dplyr)
+
+CourseObj = read.csv("CourseObj.csv")
+colnames(CourseObj) = c("Name","Obj")
+#represent NAs
+  CourseObj$Obj[CourseObj$Obj == "None"] = NA
+  CourseObj$Obj[CourseObj$Obj == "NULL"] = NA
+  
+  #remove NAs
+  CourseObj = na.omit(CourseObj)
+  
+  #Deal with duplicate rows
+  CourseObj$Obj = as.character(CourseObj$Obj)
+ 
+
+ #collapse duplicated rows
+ df = CourseObj %>% group_by(Name) %>% summarise_each(funs(paste(sort(.), collapse=",")))
+ 
+
+```
+
+Second document.#Just 11 certifications
+```{r}
+Cert = read.csv("CertificationDomainDistinctfil.csv")
+colnames(Cert) = c("DName","Name")
+
+
+  #Deal with duplicate rows
+  Cert$Name = as.character(Cert$Name)
+ 
+
+ #collapse duplicated rows
+ df2= Cert %>% group_by(Name) %>% summarise_each(funs(paste(sort(.), collapse=",")))
+ 
+ View(df2)
+```
+
+Clustering
+```{r}
+sentences <- sub("http://([[:alnum:]|[:punct:]])+", '', df$Obj) 
+
+library(tm)
+corpus = Corpus(VectorSource(sentences)) 
+ 
+# Cleaning up 
+toSpace = content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+corpus = tm_map(corpus, toSpace, "/")
+corpus = tm_map(corpus, toSpace, "@")
+corpus = tm_map(corpus, toSpace, "\\|")
+
+#Text stemming
+# Convert the text to lower case
+corpus = tm_map(corpus, content_transformer(tolower))
+# Remove numbers
+corpus = tm_map(corpus, removeNumbers)
+# Remove english common stopwords
+corpus = tm_map(corpus, removeWords, stopwords("english"))
+# Remove punctuations
+corpus = tm_map(corpus, removePunctuation)
+# Eliminate extra white spaces
+corpus = tm_map(corpus, stripWhitespace)
+
+#Building a term-document matrix
+corpusDTM = TermDocumentMatrix(corpus)
+ms <- as.matrix(corpusDTM)
+vs<- sort(rowSums(ms),decreasing=TRUE)
+ds <- data.frame(word = names(vs),freq=vs)
+
+#Wordcloud
+library(wordcloud)
+wordcloud(words = ds$word, freq = ds$freq, min.freq = 10,max.words = 200,random.order=FALSE, rot.per=0.05,colors=brewer.pal(8, "Dark2"))
+
+#Frequency of words
+barplot(ds[1:10,]$freq, las = 2, names.arg = ds[1:10,]$word,
+        col ="lightblue",width = 1.0, main ="Most frequent words",
+        ylab = "Word frequencies")
+```
+Clustering of words
+
+```{r}
+library(textmineR)
+library(stringr)
+library(tm)
+courseWords <- str_replace_all(string=df$Obj, pattern= "[&â€¦™ðŸ¥ïœ’	¸	¤]" , replacement= "")
+# build a corpus
+dfCorpus <- Corpus(VectorSource(courseWords))
+# convert to lower case
+dfCorpus <- tm_map(dfCorpus, content_transformer(tolower))
+# remove URLs
+removeURL <- function(x) gsub("http[^[:space:]]*" ,"", x)
+dfCorpus <- tm_map(dfCorpus, content_transformer(removeURL))
+# remove anything other than English letters or space
+removeNumPunct <- function(x) gsub("[^[:alpha:][:space:]]*", "", x)
+dfCorpus <- tm_map(dfCorpus, content_transformer(removeNumPunct))
+# remove stopwords
+myStopwords <- c(setdiff(stopwords('english'), c("r", "big")),
+"use", "see", "used", "via", "amp")
+dfCorpus <- tm_map(dfCorpus, removeWords, myStopwords)
+# remove extra whitespace
+dfCorpus <- tm_map(dfCorpus, stripWhitespace)
+
+
+# converting corpus to data frame
+dfpos = data.frame(Obj = sapply(dfCorpus, as.character), stringsAsFactors = FALSE)
+df = as.data.frame(df)
+df$Name = as.character(df$Name)
+dfpos = as.data.frame(cbind(df$Name, dfpos$Obj))
+dfpost = as.data.frame(dfpos)
+dfpost$ID = seq.int(nrow(dfpost))
+colnames(dfpost) = c("Name","Obj","ID")
+dfpost$Obj = as.character(dfpost$Obj)
+```
+
+Find the best k
+```{r}
+#finding the best k
+#get the data as a corpus
+dfWords = Corpus(VectorSource(dfpost$Obj))
+
+#a document term matrix
+dfwordsdtm <- DocumentTermMatrix(dfWords)
+
+#remove sparse data
+sparseData <- removeSparseTerms(dfwordsdtm, sparse=0.995)
+
+
+# Convert to data frame
+sparsedf <- as.data.frame(as.matrix(sparseData))
+
+row.names(sparsedf) = dfpost$Name
+
+
+# function to compute average silhouette for k clusters
+library(tidyverse)  # data manipulation
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering algorithms & visualization
+
+# function to compute average silhouette for k clusters
+avg_sil <- function(k) {
+  km.res <- kmeans(sparsedf, centers = k, nstart = 25)
+  ss <- silhouette(km.res$cluster, dist(sparsedf))
+  mean(ss[, 3])
+}
+
+# Compute and plot wss for k = 2 to k = 15
+k.values <- 2:15
+
+# extract avg silhouette for 2-15 clusters
+avg_sil_values <- map_dbl(k.values, avg_sil)
+
+plot(k.values, avg_sil_values,
+       type = "b", pch = 19, frame = FALSE, 
+       xlab = "Number of clusters K",
+       ylab = "Average Silhouettes")
+
+fviz_nbclust(sparsedf, kmeans, method = "silhouette")
+
+#Elbow method
+# function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(sparsedf, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 1 to k = 15
+k.values <- 1:15
+
+# extract wss for 2-15 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+       type="b", pch = 19, frame = FALSE, 
+       xlab="Number of clusters K",
+       ylab="Total within-clusters sum of squares")
+
+fviz_nbclust(sparsedf, kmeans, method = "wss")
+```
+
+Cluster the Texts with k = 2
+```{r}
+# TF-IDF and cosine similarity
+# create a document term matrix 
+tf_mat <- as.matrix(sparsedf)
+
+M1_T = t(tf_mat)
+set.seed(101)
+kmeansResult1 <- kmeans(M1_T, 2)
+#round(kmeansResult1$centers, digits=3)
+
+for (i in 1:2) {
+  cat(paste("cluster ", i, ": ", sep=""))
+  s <- sort(kmeansResult1$centers[i,], decreasing=T)
+  cat(names(s)[1:44], ", ")
+}
+
+fviz_cluster(kmeansResult1,M1_T)
+
+#each clusters
+Cluster1 = as.data.frame(M1_T[kmeansResult1$cluster==1,])
+Cluster2 = as.data.frame(M1_T[kmeansResult1$cluster==2,])
+
+#Cluster1a = as.data.frame(tf_mat[kmeansResult1$cluster==1,])
+#Cluster2a = as.data.frame(tf_mat[kmeansResult1$cluster==2,])
+```
+Check matching words in the document
+```{r}
+certWords <- str_replace_all(string=df2$DName, pattern= "[&â€¦™ðŸ¥ïœ’	¸	¤]" , replacement= "")
+# build a corpus
+df2Corpus <- Corpus(VectorSource(certWords))
+# convert to lower case
+df2Corpus <- tm_map(df2Corpus, content_transformer(tolower))
+# remove URLs
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+df2Corpus <- tm_map(df2Corpus, content_transformer(removeURL))
+# remove anything other than English letters or space
+removeNumPunct <- function(x) gsub("[^[:alpha:][:space:]]*", "", x)
+df2Corpus <- tm_map(df2Corpus, content_transformer(removeNumPunct))
+# remove stopwords
+myStopwords <- c(setdiff(stopwords('english'), c("r", "big")),
+"use", "see", "used", "via", "amp","using")
+df2Corpus <- tm_map(df2Corpus, removeWords, myStopwords)
+# remove extra whitespace
+df2Corpus <- tm_map(df2Corpus, stripWhitespace)
+# converting corpus to data frame
+df2pos = data.frame(DName = sapply(df2Corpus, as.character), stringsAsFactors = FALSE)
+df2$Name = as.character(df2$Name)
+df2pos = as.data.frame(cbind(df2$Name, df2pos$DName))
+df2post = as.data.frame(df2pos)
+df2post$ID = seq.int(nrow(df2post))
+colnames(df2post) = c("Name","DName","ID")
+df2post$DName = as.character(df2post$DName)
+
+```
+Matching names
+```{r}
+#get the data as a corpus
+df2Words = Corpus(VectorSource(df2post$DName))
+
+#a document term matrix
+df2wordsdtm <- DocumentTermMatrix(df2Words)
+
+#remove sparse data
+sparseData2 <- removeSparseTerms(df2wordsdtm, sparse=0.995)
+
+# Convert to data frame
+set.seed(101)
+sparsedf2 <- as.data.frame(as.matrix(sparseData2))
+row.names(sparsedf2) = df2post$Name
+sparsedf2[1:11,][sample(seq(sparsedf2[1:11,]),70)] = 1
+
+
+```
+Cluster 1
+```{r}
+#create a data frame of intersections
+cluster1T= as.data.frame (intersect(colnames(sparsedf2), row.names(Cluster1)))
+#Create empty columns
+cluster1T[,"Certifications"] = NA
+cluster1T[,"Coursename"] = NA
+cluster1T[,"CourseDesc"] = NA
+colnames(cluster1T) = c("Intersection","Coursename","CourseDesc","Certifications")
+
+#match columns to bring coursename
+cluster1F <- Cluster1[,cluster1T$Intersection] 
+cluster1T$Coursename = colnames(cluster1F)
+
+#Certifications- Any value in each intersection column greater than 0
+ids2 = match(cluster1T$Intersection,colnames(sparsedf2))
+cluster1P = sparsedf2[,ids2]
+
+#convert row to columns in cluster2P
+clu_S = t(cluster1P)
+cluS= apply(clu_S, 1, function(x) paste(colnames(clu_S)[which(x > 0)], collapse = ", "))
+cluster1T$Certifications = cluS
+
+#course desciption for each course
+ids3 = match(cluster1T$Coursename,dfpost$Name)
+cluster1Q= dfpost[ids3,]
+cluster1T$CourseDesc = cluster1Q$Obj
+
+```
+Cluster 2
+```{r}
+
+#create a data frame of intersections
+cluster2T= as.data.frame (intersect(colnames(sparsedf2), row.names(Cluster2)))
+#Create empty columns
+cluster2T[,"Certifications"] = NA
+cluster2T[,"Coursename"] = NA
+cluster2T[,"CourseDesc"] = NA
+colnames(cluster2T) = c("Intersection","Coursename","CourseDesc","Certifications")
+
+#match columns to bring coursename
+cluster2F <- Cluster2[,cluster2T$Intersection] 
+cluster2T$Coursename = colnames(cluster2F)
+
+#Certifications- Any value in each intersection column greater than 0
+idS2 = match(cluster2T$Intersection,colnames(sparsedf2))
+cluster2P = sparsedf2[,idS2]
+
+#convert row to columns in cluster2P
+clu_T = t(cluster2P)
+clu= apply(clu_T, 1, function(x) paste(colnames(clu_T)[which(x > 0)], collapse = ", "))
+cluster2T$Certifications = clu
+
+#course desciption for each course
+idx3 = match(cluster2T$Coursename,dfpost$Name)
+cluster2Q= dfpost[idx3,]
+cluster2T$CourseDesc = cluster2Q$Obj
+
+```
+
+TF_IDF
+```{r}
+#Vocab and DTM
+library(text2vec)
+tok_fun = word_tokenizer
+
+it_train = itoken(df$Obj,
+                  tokenizer = tok_fun,
+                  progressbar = TRUE)
+Cvocab = create_vocabulary(it_train)
+Cvectorizer = vocab_vectorizer(Cvocab)
+C_traindtm = create_dtm(it_train, Cvectorizer)
+
+#fit the TF-IDF to the train data
+tfidf <- TfIdf$new()
+# fit the model to the train data and transform it with the fitted model
+C_traintfidf <- fit_transform(C_traindtm, tfidf)
+
+#Normalizedversion
+C_train = normalize(C_traintfidf, "l1")
+row.names(C_train) = dfpost$Name
+```
+
+kmeans clustering on tf_idf
+```{r}
+
+# create a document term matrix 
+T_mat <- as.matrix(C_train)
+
+T1_T = t(T_mat)
+set.seed(101)
+kmeansResult2 <- kmeans(T1_T, 2)
+#round(kmeansResult1$centers, digits=3)
+
+for (i in 1:2) {
+  cat(paste("cluster ", i, ": ", sep=""))
+  s <- sort(kmeansResult2$centers[i,], decreasing=T)
+  cat(names(s)[1:5], ", ")
+}
+
+fviz_cluster(kmeansResult2,T1_T)
+
+#each clusters
+TCluster1 = as.data.frame(T1_T[kmeansResult2$cluster==1,])
+TCluster2 = as.data.frame(T1_T[kmeansResult2$cluster==2,])
+```
+Ncluster1
+```{r}
+#create a data frame of intersections
+Tcluster1T= as.data.frame (intersect(colnames(sparsedf2), row.names(TCluster1)))
+#Create empty columns
+Tcluster1T[,"Certifications"] = NA
+Tcluster1T[,"Coursename"] = NA
+Tcluster1T[,"CourseDesc"] = NA
+colnames(Tcluster1T) = c("Intersection","Coursename","CourseDesc","Certifications")
+
+#match columns to bring coursename
+Tcluster1F <- TCluster1[,Tcluster1T$Intersection] 
+Tcluster1T$Coursename = colnames(Tcluster1F)
+
+#Certifications- Any value in each intersection column greater than 0
+Tids2 = match(Tcluster1T$Intersection,colnames(sparsedf2))
+Tcluster1P = sparsedf2[,Tids2]
+
+#convert row to columns in cluster2P
+Tclu_S = t(Tcluster1P)
+TcluS= apply(Tclu_S, 1, function(x) paste(colnames(Tclu_S)[which(x > 0)], collapse = ", "))
+Tcluster1T$Certifications = TcluS
+
+#course desciption for each course
+Tids3 = match(Tcluster1T$Coursename,dfpost$Name)
+Tcluster1Q= dfpost[Tids3,]
+Tcluster1T$CourseDesc = Tcluster1Q$Obj
+```
+Tcluster 2
+```{r}
+#create a data frame of intersections
+Tcluster2T= as.data.frame (intersect(colnames(sparsedf2), row.names(TCluster2)))
+#Create empty columns
+Tcluster2T[,"Certifications"] = NA
+Tcluster2T[,"Coursename"] = NA
+Tcluster2T[,"CourseDesc"] = NA
+colnames(Tcluster2T) = c("Intersection","Coursename","CourseDesc","Certifications")
+
+#match columns to bring coursename
+Tcluster2F <- TCluster2[,Tcluster2T$Intersection] 
+Tcluster2T$Coursename = colnames(Tcluster2F)
+
+#Certifications- Any value in each intersection column greater than 0
+TidS2 = match(Tcluster2T$Intersection,colnames(sparsedf2))
+Tcluster2P = sparsedf2[,TidS2]
+
+#convert row to columns in cluster2P
+Tclu_T = t(Tcluster2P)
+Tclu= apply(Tclu_T, 1, function(x) paste(colnames(Tclu_T)[which(x > 0)], collapse = ", "))
+Tcluster2T$Certifications = Tclu
+#course desciption for each course
+Tidx3 = match(Tcluster2T$Coursename,dfpost$Name)
+Tcluster2Q= dfpost[Tidx3,]
+Tcluster2T$CourseDesc = Tcluster2Q$Obj
+```
+Final Tables
+```{r}
+#rmove intersection column
+cluster1T$Intersection = NULL
+cluster2T$Intersection = NULL
+Tcluster1T$Intersection = NULL
+Tcluster2T$Intersection = NULL
+
+#write tables into excel files 
+write.csv(cluster1T,"MatchingNamescluster1.csv")
+write.csv(cluster2T,"MatchingNamescluster2.csv")
+write.csv(Tcluster1T,"TF_IDFcluster1.csv")
+write.csv(Tcluster2T,"TF_IDFcluster2.csv")
+```
+
+Justification with ratio dataset
+```{r}
+
+#import ratio dataset
+Ratio = read.csv("Ratio.csv")
+
+#delete the first column
+Ratio = Ratio[,-1]
+
+#remove whitespaces in rownames and convert to lower case
+Ratio$Course.Name <- gsub('\\s+', '', Ratio$Course.Name)
+Ratio$Course.Name = tolower(Ratio$Course.Name)
+
+#remove duplicate rows
+Ratio = Ratio[!duplicated(Ratio$Course.Name), ]
+
+#remove rows with missing values
+Ratio =na.omit(Ratio)
+
+#make first column row names instead
+rownames(Ratio) = Ratio[,1]
+
+#remove coursename column
+Ratio$Course.Name = NULL
+
+#remove whitespaces in columnnames
+colnames(Ratio) <- gsub('\\s+', '', colnames(Ratio))
+colnames(Ratio)= tolower(colnames(Ratio))
+
+#greater than 0 = P, less than 0 = N
+Ratio[,1:11] = ifelse(Ratio[,1:11] > 0,"TRUE","FALSE")
+
+```
+Each certification
+```{r}
+#move data into another dataframe
+dfJ = cluster1T
+#remove whitespaces in rownames and convert to lower case
+dfJ$Coursename<- gsub('\\s+', '', dfJ$Coursename)
+dfJ$Coursename = tolower(dfJ$Coursename)
+
+dfJ2 = cluster2T
+dfJ2$Coursename<- gsub('\\s+', '', dfJ2$Coursename)
+dfJ2$Coursename = tolower(dfJ2$Coursename)
+
+TdfJ1 = Tcluster1T
+TdfJ1$Coursename<- gsub('\\s+', '', TdfJ1$Coursename)
+TdfJ1$Coursename = tolower(TdfJ1$Coursename)
+
+TdfJ2 = Tcluster2T
+TdfJ2$Coursename<- gsub('\\s+', '', TdfJ2$Coursename)
+TdfJ2$Coursename = tolower(TdfJ2$Coursename)
+
+```
+CEH
+```{r}
+#CEH
+library(ggplot2)
+CEH= as.data.frame(Ratio$certified.ethical.hacking)
+colnames(CEH) = "Exists_spreadsheets"
+CEH$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CEH_Cluster1= as.data.frame(intersect(CEH$CourseName, dfJ$Coursename))
+colnames(CEH_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CEH_Cluster1$Intersections,CEH$CourseName)
+TrnQ= CEH[Trn,]
+CEH_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CEH_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CEH_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Certified Ethical Hacker"
+CEH_Cluster1 = transform(CEH_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CEH_Cluster1$Verdict = ifelse(CEH_Cluster1$Exists_Spreadsheets == "TRUE"& CEH_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CEH_Cluster1$Exists_Spreadsheets == "TRUE"& CEH_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CEH_Cluster1$Exists_Spreadsheets == "FALSE"& CEH_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CEH_Cluster1$Exists_Spreadsheets == "FALSE"& CEH_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CEH_ACC1 = ((length(CEH_Cluster1$Verdict[CEH_Cluster1$Verdict== "TruePositive"]) + length(CEH_Cluster1$Verdict[CEH_Cluster1$Verdict== "TrueNegative"]))/(length(CEH_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CEH_Cluster2= as.data.frame(intersect(CEH$CourseName, dfJ2$Coursename))
+colnames(CEH_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CEH_Cluster2$Intersections,CEH$CourseName)
+TrnQ2= CEH[Trn2,]
+CEH_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CEH_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CEH_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Certified Ethical Hacker"
+CEH_Cluster2 = transform(CEH_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CEH_Cluster2$Verdict = ifelse(CEH_Cluster2$Exists_Spreadsheets == "TRUE"& CEH_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CEH_Cluster2$Exists_Spreadsheets == "TRUE"& CEH_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CEH_Cluster2$Exists_Spreadsheets == "FALSE"& CEH_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CEH_Cluster2$Exists_Spreadsheets == "FALSE"& CEH_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CEH_ACC2 = ((length(CEH_Cluster2$Verdict[CEH_Cluster2$Verdict== "TruePositive"]) + length(CEH_Cluster2$Verdict[CEH_Cluster2$Verdict== "TrueNegative"]))/(length(CEH_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCEH_Cluster1= as.data.frame(intersect(CEH$CourseName, TdfJ1$Coursename))
+colnames(TCEH_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCEH_Cluster1$Intersections,CEH$CourseName)
+TrnQT= CEH[TrnT,]
+TCEH_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCEH_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCEH_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Certified Ethical Hacker"
+TCEH_Cluster1 = transform(TCEH_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCEH_Cluster1$Verdict = ifelse(TCEH_Cluster1$Exists_Spreadsheets == "TRUE"& TCEH_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCEH_Cluster1$Exists_Spreadsheets == "TRUE"& TCEH_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCEH_Cluster1$Exists_Spreadsheets == "FALSE"& TCEH_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCEH_Cluster1$Exists_Spreadsheets == "FALSE"& TCEH_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCEH_ACC1 = ((length(TCEH_Cluster1$Verdict[TCEH_Cluster1$Verdict== "TruePositive"]) + length(TCEH_Cluster1$Verdict[TCEH_Cluster1$Verdict== "TrueNegative"]))/(length(TCEH_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCEH_Cluster2= as.data.frame(intersect(CEH$CourseName, TdfJ2$Coursename))
+colnames(TCEH_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCEH_Cluster2$Intersections,CEH$CourseName)
+TrnQ2T= CEH[Trn2T,]
+TCEH_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCEH_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCEH_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Certified Ethical Hacker"
+TCEH_Cluster2 = transform(TCEH_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCEH_Cluster2$Verdict = ifelse(TCEH_Cluster2$Exists_Spreadsheets == "TRUE"& TCEH_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCEH_Cluster2$Exists_Spreadsheets == "TRUE"& TCEH_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCEH_Cluster2$Exists_Spreadsheets == "FALSE"& TCEH_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCEH_Cluster2$Exists_Spreadsheets == "FALSE"& TCEH_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCEH_ACC2 = ((length(TCEH_Cluster2$Verdict[TCEH_Cluster2$Verdict== "TruePositive"]) + length(TCEH_Cluster2$Verdict[TCEH_Cluster2$Verdict== "TrueNegative"]))/(length(TCEH_Cluster2$Verdict))) * 100
+#accuracy
+CEH_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CEH_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CEH_percent$Values = c(CEH_ACC1,TCEH_ACC1,CEH_ACC2,TCEH_ACC2,100,100)
+colnames(CEH_percent)= c("Cluster","Method","Values")
+CEH_percent$Cluster=as.factor(CEH_percent$Cluster)
+CEH_percent$Method = as.factor(CEH_percent$Method)
+# Grouped Bar Plot
+ggplot(CEH_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CCNA
+```{r}
+#CCNA
+CCNA= as.data.frame(Ratio$cisco.certified.network.associate.security.certification)
+colnames(CCNA) = "Exists_spreadsheets"
+CCNA$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CCNA_Cluster1= as.data.frame(intersect(CCNA$CourseName, dfJ$Coursename))
+colnames(CCNA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CCNA_Cluster1$Intersections,CCNA$CourseName)
+TrnQ= CCNA[Trn,]
+CCNA_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CCNA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CCNA_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Cisco Certified Network Associate Security Certification"
+CCNA_Cluster1 = transform(CCNA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CCNA_Cluster1$Verdict = ifelse(CCNA_Cluster1$Exists_Spreadsheets == "TRUE"& CCNA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CCNA_Cluster1$Exists_Spreadsheets == "TRUE"& CCNA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CCNA_Cluster1$Exists_Spreadsheets == "FALSE"& CCNA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CCNA_Cluster1$Exists_Spreadsheets == "FALSE"& CCNA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CCNA_ACC1 = ((length(CCNA_Cluster1$Verdict[CCNA_Cluster1$Verdict== "TruePositive"]) + length(CCNA_Cluster1$Verdict[CCNA_Cluster1$Verdict== "TrueNegative"]))/(length(CCNA_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CCNA_Cluster2= as.data.frame(intersect(CCNA$CourseName, dfJ2$Coursename))
+colnames(CCNA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CCNA_Cluster2$Intersections,CCNA$CourseName)
+TrnQ2= CCNA[Trn2,]
+CCNA_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CCNA_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CCNA_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Cisco Certified Network Associate Security Certification"
+CCNA_Cluster2 = transform(CCNA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CCNA_Cluster2$Verdict = ifelse(CCNA_Cluster2$Exists_Spreadsheets == "TRUE"& CCNA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CCNA_Cluster2$Exists_Spreadsheets == "TRUE"& CCNA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CCNA_Cluster2$Exists_Spreadsheets == "FALSE"& CCNA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CCNA_Cluster2$Exists_Spreadsheets == "FALSE"& CCNA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CCNA_ACC2 = ((length(CCNA_Cluster2$Verdict[CCNA_Cluster2$Verdict== "TruePositive"]) + length(CCNA_Cluster2$Verdict[CCNA_Cluster2$Verdict== "TrueNegative"]))/(length(CCNA_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCCNA_Cluster1= as.data.frame(intersect(CCNA$CourseName, TdfJ1$Coursename))
+colnames(TCCNA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCCNA_Cluster1$Intersections,CCNA$CourseName)
+TrnQT= CCNA[TrnT,]
+TCCNA_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCCNA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCCNA_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Cisco Certified Network Associate Security Certification"
+TCCNA_Cluster1 = transform(TCCNA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCCNA_Cluster1$Verdict = ifelse(TCCNA_Cluster1$Exists_Spreadsheets == "TRUE"& TCCNA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCCNA_Cluster1$Exists_Spreadsheets == "TRUE"& TCCNA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCCNA_Cluster1$Exists_Spreadsheets == "FALSE"& TCCNA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCCNA_Cluster1$Exists_Spreadsheets == "FALSE"& TCCNA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCCNA_ACC1 = ((length(TCCNA_Cluster1$Verdict[TCCNA_Cluster1$Verdict== "TruePositive"]) + length(TCCNA_Cluster1$Verdict[TCCNA_Cluster1$Verdict== "TrueNegative"]))/(length(TCCNA_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCCNA_Cluster2= as.data.frame(intersect(CCNA$CourseName, TdfJ2$Coursename))
+colnames(TCCNA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCCNA_Cluster2$Intersections,CCNA$CourseName)
+TrnQ2T= CCNA[Trn2T,]
+TCCNA_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCCNA_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCCNA_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Cisco Certified Network Associate Security Certification"
+TCCNA_Cluster2 = transform(TCCNA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCCNA_Cluster2$Verdict = ifelse(TCCNA_Cluster2$Exists_Spreadsheets == "TRUE"& TCCNA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCCNA_Cluster2$Exists_Spreadsheets == "TRUE"& TCCNA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCCNA_Cluster2$Exists_Spreadsheets == "FALSE"& TCCNA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCCNA_Cluster2$Exists_Spreadsheets == "FALSE"& TCCNA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCCNA_ACC2 = ((length(TCCNA_Cluster2$Verdict[TCCNA_Cluster2$Verdict== "TruePositive"]) + length(TCCNA_Cluster2$Verdict[TCCNA_Cluster2$Verdict== "TrueNegative"]))/(length(TCCNA_Cluster2$Verdict))) * 100
+#accuracy
+CCNA_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CCNA_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CCNA_percent$Values = c(CCNA_ACC1,TCCNA_ACC1,CCNA_ACC2,TCCNA_ACC2,100,100)
+colnames(CCNA_percent)= c("Cluster","Method","Values")
+CCNA_percent$Cluster=as.factor(CCNA_percent$Cluster)
+CCNA_percent$Method = as.factor(CCNA_percent$Method)
+# Grouped Bar Plot
+ggplot(CCNA_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CASP
+```{r}
+#CASP
+CASP= as.data.frame(Ratio$cisco.certified.network.associate.security.certification)
+colnames(CASP) = "Exists_spreadsheets"
+CASP$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CASP_Cluster1= as.data.frame(intersect(CASP$CourseName, dfJ$Coursename))
+colnames(CASP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CASP_Cluster1$Intersections,CASP$CourseName)
+TrnQ= CASP[Trn,]
+CASP_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CASP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CASP_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Advanced Security Practitioner CASP)"
+CASP_Cluster1 = transform(CASP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CASP_Cluster1$Verdict = ifelse(CASP_Cluster1$Exists_Spreadsheets == "TRUE"& CASP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CASP_Cluster1$Exists_Spreadsheets == "TRUE"& CASP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CASP_Cluster1$Exists_Spreadsheets == "FALSE"& CASP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CASP_Cluster1$Exists_Spreadsheets == "FALSE"& CASP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CASP_ACC1 = ((length(CASP_Cluster1$Verdict[CASP_Cluster1$Verdict== "TruePositive"]) + length(CASP_Cluster1$Verdict[CASP_Cluster1$Verdict== "TrueNegative"]))/(length(CASP_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CASP_Cluster2= as.data.frame(intersect(CASP$CourseName, dfJ2$Coursename))
+colnames(CASP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CASP_Cluster2$Intersections,CASP$CourseName)
+TrnQ2= CASP[Trn2,]
+CASP_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CASP_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CASP_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Advanced Security Practitioner CASP)"
+CASP_Cluster2 = transform(CASP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CASP_Cluster2$Verdict = ifelse(CASP_Cluster2$Exists_Spreadsheets == "TRUE"& CASP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CASP_Cluster2$Exists_Spreadsheets == "TRUE"& CASP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CASP_Cluster2$Exists_Spreadsheets == "FALSE"& CASP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CASP_Cluster2$Exists_Spreadsheets == "FALSE"& CASP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CASP_ACC2 = ((length(CASP_Cluster2$Verdict[CASP_Cluster2$Verdict== "TruePositive"]) + length(CASP_Cluster2$Verdict[CASP_Cluster2$Verdict== "TrueNegative"]))/(length(CASP_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCASP_Cluster1= as.data.frame(intersect(CASP$CourseName, TdfJ1$Coursename))
+colnames(TCASP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCASP_Cluster1$Intersections,CASP$CourseName)
+TrnQT= CASP[TrnT,]
+TCASP_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCASP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCASP_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Advanced Security Practitioner CASP)"
+TCASP_Cluster1 = transform(TCASP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCASP_Cluster1$Verdict = ifelse(TCASP_Cluster1$Exists_Spreadsheets == "TRUE"& TCASP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCASP_Cluster1$Exists_Spreadsheets == "TRUE"& TCASP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCASP_Cluster1$Exists_Spreadsheets == "FALSE"& TCASP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCASP_Cluster1$Exists_Spreadsheets == "FALSE"& TCASP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCASP_ACC1 = ((length(TCASP_Cluster1$Verdict[TCASP_Cluster1$Verdict== "TruePositive"]) + length(TCASP_Cluster1$Verdict[TCASP_Cluster1$Verdict== "TrueNegative"]))/(length(TCASP_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCASP_Cluster2= as.data.frame(intersect(CASP$CourseName, TdfJ2$Coursename))
+colnames(TCASP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCASP_Cluster2$Intersections,CASP$CourseName)
+TrnQ2T= CASP[Trn2T,]
+TCASP_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCASP_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCASP_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Advanced Security Practitioner CASP)"
+TCASP_Cluster2 = transform(TCASP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCASP_Cluster2$Verdict = ifelse(TCASP_Cluster2$Exists_Spreadsheets == "TRUE"& TCASP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCASP_Cluster2$Exists_Spreadsheets == "TRUE"& TCASP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCASP_Cluster2$Exists_Spreadsheets == "FALSE"& TCASP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCASP_Cluster2$Exists_Spreadsheets == "FALSE"& TCASP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCASP_ACC2 = ((length(TCASP_Cluster2$Verdict[TCASP_Cluster2$Verdict== "TruePositive"]) + length(TCASP_Cluster2$Verdict[TCASP_Cluster2$Verdict== "TrueNegative"]))/(length(TCASP_Cluster2$Verdict))) * 100
+#accuracy
+CASP_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CASP_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CASP_percent$Values = c(CASP_ACC1,TCASP_ACC1,CASP_ACC2,TCASP_ACC2,100,100)
+colnames(CASP_percent)= c("Cluster","Method","Values")
+CASP_percent$Cluster=as.factor(CASP_percent$Cluster)
+CASP_percent$Method = as.factor(CASP_percent$Method)
+# Grouped Bar Plot
+ggplot(CASP_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CCSP
+```{r}
+#CCSP
+CCSP= as.data.frame(Ratio$certified.cloud.security.professional)
+colnames(CCSP) = "Exists_spreadsheets"
+CCSP$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CCSP_Cluster1= as.data.frame(intersect(CCSP$CourseName, dfJ$Coursename))
+colnames(CCSP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CCSP_Cluster1$Intersections,CCSP$CourseName)
+TrnQ= CCSP[Trn,]
+CCSP_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CCSP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CCSP_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Certified Cloud Security Professional"
+CCSP_Cluster1 = transform(CCSP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CCSP_Cluster1$Verdict = ifelse(CCSP_Cluster1$Exists_Spreadsheets == "TRUE"& CCSP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CCSP_Cluster1$Exists_Spreadsheets == "TRUE"& CCSP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CCSP_Cluster1$Exists_Spreadsheets == "FALSE"& CCSP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CCSP_Cluster1$Exists_Spreadsheets == "FALSE"& CCSP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CCSP_ACC1 = ((length(CCSP_Cluster1$Verdict[CCSP_Cluster1$Verdict== "TruePositive"]) + length(CCSP_Cluster1$Verdict[CCSP_Cluster1$Verdict== "TrueNegative"]))/(length(CCSP_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CCSP_Cluster2= as.data.frame(intersect(CCSP$CourseName, dfJ2$Coursename))
+colnames(CCSP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CCSP_Cluster2$Intersections,CCSP$CourseName)
+TrnQ2= CCSP[Trn2,]
+CCSP_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CCSP_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CCSP_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Certified Cloud Security Professional"
+CCSP_Cluster2 = transform(CCSP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CCSP_Cluster2$Verdict = ifelse(CCSP_Cluster2$Exists_Spreadsheets == "TRUE"& CCSP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CCSP_Cluster2$Exists_Spreadsheets == "TRUE"& CCSP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CCSP_Cluster2$Exists_Spreadsheets == "FALSE"& CCSP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CCSP_Cluster2$Exists_Spreadsheets == "FALSE"& CCSP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CCSP_ACC2 = ((length(CCSP_Cluster2$Verdict[CCSP_Cluster2$Verdict== "TruePositive"]) + length(CCSP_Cluster2$Verdict[CCSP_Cluster2$Verdict== "TrueNegative"]))/(length(CCSP_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCCSP_Cluster1= as.data.frame(intersect(CCSP$CourseName, TdfJ1$Coursename))
+colnames(TCCSP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCCSP_Cluster1$Intersections,CCSP$CourseName)
+TrnQT= CCSP[TrnT,]
+TCCSP_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCCSP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCCSP_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Certified Cloud Security Professional"
+TCCSP_Cluster1 = transform(TCCSP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCCSP_Cluster1$Verdict = ifelse(TCCSP_Cluster1$Exists_Spreadsheets == "TRUE"& TCCSP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCCSP_Cluster1$Exists_Spreadsheets == "TRUE"& TCCSP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCCSP_Cluster1$Exists_Spreadsheets == "FALSE"& TCCSP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCCSP_Cluster1$Exists_Spreadsheets == "FALSE"& TCCSP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCCSP_ACC1 = ((length(TCCSP_Cluster1$Verdict[TCCSP_Cluster1$Verdict== "TruePositive"]) + length(TCCSP_Cluster1$Verdict[TCCSP_Cluster1$Verdict== "TrueNegative"]))/(length(TCCSP_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCCSP_Cluster2= as.data.frame(intersect(CCSP$CourseName, TdfJ2$Coursename))
+colnames(TCCSP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCCSP_Cluster2$Intersections,CCSP$CourseName)
+TrnQ2T= CCSP[Trn2T,]
+TCCSP_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCCSP_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCCSP_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Certified Cloud Security Professional"
+TCCSP_Cluster2 = transform(TCCSP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCCSP_Cluster2$Verdict = ifelse(TCCSP_Cluster2$Exists_Spreadsheets == "TRUE"& TCCSP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCCSP_Cluster2$Exists_Spreadsheets == "TRUE"& TCCSP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCCSP_Cluster2$Exists_Spreadsheets == "FALSE"& TCCSP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCCSP_Cluster2$Exists_Spreadsheets == "FALSE"& TCCSP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCCSP_ACC2 = ((length(TCCSP_Cluster2$Verdict[TCCSP_Cluster2$Verdict== "TruePositive"]) + length(TCCSP_Cluster2$Verdict[TCCSP_Cluster2$Verdict== "TrueNegative"]))/(length(TCCSP_Cluster2$Verdict))) * 100
+#accuracy
+CCSP_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CCSP_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CCSP_percent$Values = c(CCSP_ACC1,TCCSP_ACC1,CCSP_ACC2,TCCSP_ACC2,100,100)
+colnames(CCSP_percent)= c("Cluster","Method","Values")
+CCSP_percent$Cluster=as.factor(CCSP_percent$Cluster)
+CCSP_percent$Method = as.factor(CCSP_percent$Method)
+# Grouped Bar Plot
+ggplot(CCSP_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CISM
+```{r}
+#CISM
+CISM= as.data.frame(Ratio$certified.information.security.manager)
+colnames(CISM) = "Exists_spreadsheets"
+CISM$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CISM_Cluster1= as.data.frame(intersect(CISM$CourseName, dfJ$Coursename))
+colnames(CISM_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CISM_Cluster1$Intersections,CISM$CourseName)
+TrnQ= CISM[Trn,]
+CISM_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CISM_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CISM_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Certified Information Security Manager"
+CISM_Cluster1 = transform(CISM_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISM_Cluster1$Verdict = ifelse(CISM_Cluster1$Exists_Spreadsheets == "TRUE"& CISM_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISM_Cluster1$Exists_Spreadsheets == "TRUE"& CISM_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISM_Cluster1$Exists_Spreadsheets == "FALSE"& CISM_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISM_Cluster1$Exists_Spreadsheets == "FALSE"& CISM_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISM_ACC1 = ((length(CISM_Cluster1$Verdict[CISM_Cluster1$Verdict== "TruePositive"]) + length(CISM_Cluster1$Verdict[CISM_Cluster1$Verdict== "TrueNegative"]))/(length(CISM_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CISM_Cluster2= as.data.frame(intersect(CISM$CourseName, dfJ2$Coursename))
+colnames(CISM_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CISM_Cluster2$Intersections,CISM$CourseName)
+TrnQ2= CISM[Trn2,]
+CISM_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CISM_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CISM_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Certified Information Security Manager"
+CISM_Cluster2 = transform(CISM_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISM_Cluster2$Verdict = ifelse(CISM_Cluster2$Exists_Spreadsheets == "TRUE"& CISM_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISM_Cluster2$Exists_Spreadsheets == "TRUE"& CISM_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISM_Cluster2$Exists_Spreadsheets == "FALSE"& CISM_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISM_Cluster2$Exists_Spreadsheets == "FALSE"& CISM_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISM_ACC2 = ((length(CISM_Cluster2$Verdict[CISM_Cluster2$Verdict== "TruePositive"]) + length(CISM_Cluster2$Verdict[CISM_Cluster2$Verdict== "TrueNegative"]))/(length(CISM_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCISM_Cluster1= as.data.frame(intersect(CISM$CourseName, TdfJ1$Coursename))
+colnames(TCISM_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCISM_Cluster1$Intersections,CISM$CourseName)
+TrnQT= CISM[TrnT,]
+TCISM_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCISM_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCISM_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Certified Information Security Manager"
+TCISM_Cluster1 = transform(TCISM_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISM_Cluster1$Verdict = ifelse(TCISM_Cluster1$Exists_Spreadsheets == "TRUE"& TCISM_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISM_Cluster1$Exists_Spreadsheets == "TRUE"& TCISM_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISM_Cluster1$Exists_Spreadsheets == "FALSE"& TCISM_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISM_Cluster1$Exists_Spreadsheets == "FALSE"& TCISM_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISM_ACC1 = ((length(TCISM_Cluster1$Verdict[TCISM_Cluster1$Verdict== "TruePositive"]) + length(TCISM_Cluster1$Verdict[TCISM_Cluster1$Verdict== "TrueNegative"]))/(length(TCISM_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCISM_Cluster2= as.data.frame(intersect(CISM$CourseName, TdfJ2$Coursename))
+colnames(TCISM_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCISM_Cluster2$Intersections,CISM$CourseName)
+TrnQ2T= CISM[Trn2T,]
+TCISM_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCISM_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCISM_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Certified Information Security Manager"
+TCISM_Cluster2 = transform(TCISM_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISM_Cluster2$Verdict = ifelse(TCISM_Cluster2$Exists_Spreadsheets == "TRUE"& TCISM_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISM_Cluster2$Exists_Spreadsheets == "TRUE"& TCISM_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISM_Cluster2$Exists_Spreadsheets == "FALSE"& TCISM_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISM_Cluster2$Exists_Spreadsheets == "FALSE"& TCISM_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISM_ACC2 = ((length(TCISM_Cluster2$Verdict[TCISM_Cluster2$Verdict== "TruePositive"]) + length(TCISM_Cluster2$Verdict[TCISM_Cluster2$Verdict== "TrueNegative"]))/(length(TCISM_Cluster2$Verdict))) * 100
+#accuracy
+CISM_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CISM_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CISM_percent$Values = c(CISM_ACC1,TCISM_ACC1,CISM_ACC2,TCISM_ACC2,100,100)
+colnames(CISM_percent)= c("Cluster","Method","Values")
+CISM_percent$Cluster=as.factor(CISM_percent$Cluster)
+CISM_percent$Method = as.factor(CISM_percent$Method)
+# Grouped Bar Plot
+ggplot(CISM_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CISA
+```{r}
+#CISM
+CISA= as.data.frame(Ratio$certified.information.systems.auditor)
+colnames(CISA) = "Exists_spreadsheets"
+CISA$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CISA_Cluster1= as.data.frame(intersect(CISA$CourseName, dfJ$Coursename))
+colnames(CISA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CISA_Cluster1$Intersections,CISA$CourseName)
+TrnQ= CISA[Trn,]
+CISA_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CISA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CISA_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Auditor"
+CISA_Cluster1 = transform(CISA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISA_Cluster1$Verdict = ifelse(CISA_Cluster1$Exists_Spreadsheets == "TRUE"& CISA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISA_Cluster1$Exists_Spreadsheets == "TRUE"& CISA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISA_Cluster1$Exists_Spreadsheets == "FALSE"& CISA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISA_Cluster1$Exists_Spreadsheets == "FALSE"& CISA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISA_ACC1 = ((length(CISA_Cluster1$Verdict[CISA_Cluster1$Verdict== "TruePositive"]) + length(CISA_Cluster1$Verdict[CISA_Cluster1$Verdict== "TrueNegative"]))/(length(CISA_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CISA_Cluster2= as.data.frame(intersect(CISA$CourseName, dfJ2$Coursename))
+colnames(CISA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CISA_Cluster2$Intersections,CISA$CourseName)
+TrnQ2= CISA[Trn2,]
+CISA_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CISA_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CISA_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Auditor"
+CISA_Cluster2 = transform(CISA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISA_Cluster2$Verdict = ifelse(CISA_Cluster2$Exists_Spreadsheets == "TRUE"& CISA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISA_Cluster2$Exists_Spreadsheets == "TRUE"& CISA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISA_Cluster2$Exists_Spreadsheets == "FALSE"& CISA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISA_Cluster2$Exists_Spreadsheets == "FALSE"& CISA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISA_ACC2 = ((length(CISA_Cluster2$Verdict[CISA_Cluster2$Verdict== "TruePositive"]) + length(CISA_Cluster2$Verdict[CISA_Cluster2$Verdict== "TrueNegative"]))/(length(CISA_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCISA_Cluster1= as.data.frame(intersect(CISA$CourseName, TdfJ1$Coursename))
+colnames(TCISA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCISA_Cluster1$Intersections,CISA$CourseName)
+TrnQT= CISA[TrnT,]
+TCISA_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCISA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCISA_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Auditor"
+TCISA_Cluster1 = transform(TCISA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISA_Cluster1$Verdict = ifelse(TCISA_Cluster1$Exists_Spreadsheets == "TRUE"& TCISA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISA_Cluster1$Exists_Spreadsheets == "TRUE"& TCISA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISA_Cluster1$Exists_Spreadsheets == "FALSE"& TCISA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISA_Cluster1$Exists_Spreadsheets == "FALSE"& TCISA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISA_ACC1 = ((length(TCISA_Cluster1$Verdict[TCISA_Cluster1$Verdict== "TruePositive"]) + length(TCISA_Cluster1$Verdict[TCISA_Cluster1$Verdict== "TrueNegative"]))/(length(TCISA_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCISA_Cluster2= as.data.frame(intersect(CISA$CourseName, TdfJ2$Coursename))
+colnames(TCISA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCISA_Cluster2$Intersections,CISA$CourseName)
+TrnQ2T= CISA[Trn2T,]
+TCISA_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCISA_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCISA_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Auditor"
+TCISA_Cluster2 = transform(TCISA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISA_Cluster2$Verdict = ifelse(TCISA_Cluster2$Exists_Spreadsheets == "TRUE"& TCISA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISA_Cluster2$Exists_Spreadsheets == "TRUE"& TCISA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISA_Cluster2$Exists_Spreadsheets == "FALSE"& TCISA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISA_Cluster2$Exists_Spreadsheets == "FALSE"& TCISA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISA_ACC2 = ((length(TCISA_Cluster2$Verdict[TCISA_Cluster2$Verdict== "TruePositive"]) + length(TCISA_Cluster2$Verdict[TCISA_Cluster2$Verdict== "TrueNegative"]))/(length(TCISA_Cluster2$Verdict))) * 100
+#accuracy
+CISA_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CISA_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CISA_percent$Values = c(CISA_ACC1,TCISA_ACC1,CISA_ACC2,TCISA_ACC2,100,100)
+colnames(CISA_percent)= c("Cluster","Method","Values")
+CISA_percent$Cluster=as.factor(CISA_percent$Cluster)
+CISA_percent$Method = as.factor(CISA_percent$Method)
+# Grouped Bar Plot
+ggplot(CISA_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+CISSP
+```{r}
+#CISSP
+CISSP= as.data.frame(Ratio$certified.information.systems.security.professional)
+colnames(CISSP) = "Exists_spreadsheets"
+CISSP$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+CISSP_Cluster1= as.data.frame(intersect(CISSP$CourseName, dfJ$Coursename))
+colnames(CISSP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(CISSP_Cluster1$Intersections,CISSP$CourseName)
+TrnQ= CISSP[Trn,]
+CISSP_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(CISSP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+CISSP_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Security Professional"
+CISSP_Cluster1 = transform(CISSP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISSP_Cluster1$Verdict = ifelse(CISSP_Cluster1$Exists_Spreadsheets == "TRUE"& CISSP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISSP_Cluster1$Exists_Spreadsheets == "TRUE"& CISSP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISSP_Cluster1$Exists_Spreadsheets == "FALSE"& CISSP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISSP_Cluster1$Exists_Spreadsheets == "FALSE"& CISSP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISSP_ACC1 = ((length(CISSP_Cluster1$Verdict[CISSP_Cluster1$Verdict== "TruePositive"]) + length(CISSP_Cluster1$Verdict[CISSP_Cluster1$Verdict== "TrueNegative"]))/(length(CISSP_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+CISSP_Cluster2= as.data.frame(intersect(CISSP$CourseName, dfJ2$Coursename))
+colnames(CISSP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(CISSP_Cluster2$Intersections,CISSP$CourseName)
+TrnQ2= CISSP[Trn2,]
+CISSP_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(CISSP_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+CISSP_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Security Professional"
+CISSP_Cluster2 = transform(CISSP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+CISSP_Cluster2$Verdict = ifelse(CISSP_Cluster2$Exists_Spreadsheets == "TRUE"& CISSP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(CISSP_Cluster2$Exists_Spreadsheets == "TRUE"& CISSP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(CISSP_Cluster2$Exists_Spreadsheets == "FALSE"& CISSP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(CISSP_Cluster2$Exists_Spreadsheets == "FALSE"& CISSP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+CISSP_ACC2 = ((length(CISSP_Cluster2$Verdict[CISSP_Cluster2$Verdict== "TruePositive"]) + length(CISSP_Cluster2$Verdict[CISSP_Cluster2$Verdict== "TrueNegative"]))/(length(CISSP_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TCISSP_Cluster1= as.data.frame(intersect(CISSP$CourseName, TdfJ1$Coursename))
+colnames(TCISSP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TCISSP_Cluster1$Intersections,CISSP$CourseName)
+TrnQT= CISSP[TrnT,]
+TCISSP_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TCISSP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TCISSP_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Security Professional"
+TCISSP_Cluster1 = transform(TCISSP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISSP_Cluster1$Verdict = ifelse(TCISSP_Cluster1$Exists_Spreadsheets == "TRUE"& TCISSP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISSP_Cluster1$Exists_Spreadsheets == "TRUE"& TCISSP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISSP_Cluster1$Exists_Spreadsheets == "FALSE"& TCISSP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISSP_Cluster1$Exists_Spreadsheets == "FALSE"& TCISSP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISSP_ACC1 = ((length(TCISSP_Cluster1$Verdict[TCISSP_Cluster1$Verdict== "TruePositive"]) + length(TCISSP_Cluster1$Verdict[TCISSP_Cluster1$Verdict== "TrueNegative"]))/(length(TCISSP_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TCISSP_Cluster2= as.data.frame(intersect(CISSP$CourseName, TdfJ2$Coursename))
+colnames(TCISSP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TCISSP_Cluster2$Intersections,CISSP$CourseName)
+TrnQ2T= CISSP[Trn2T,]
+TCISSP_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TCISSP_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TCISSP_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Certified Information Systems Security Professional"
+TCISSP_Cluster2 = transform(TCISSP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TCISSP_Cluster2$Verdict = ifelse(TCISSP_Cluster2$Exists_Spreadsheets == "TRUE"& TCISSP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TCISSP_Cluster2$Exists_Spreadsheets == "TRUE"& TCISSP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TCISSP_Cluster2$Exists_Spreadsheets == "FALSE"& TCISSP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TCISSP_Cluster2$Exists_Spreadsheets == "FALSE"& TCISSP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TCISSP_ACC2 = ((length(TCISSP_Cluster2$Verdict[TCISSP_Cluster2$Verdict== "TruePositive"]) + length(TCISSP_Cluster2$Verdict[TCISSP_Cluster2$Verdict== "TrueNegative"]))/(length(TCISSP_Cluster2$Verdict))) * 100
+#accuracy
+CISSP_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+CISSP_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+CISSP_percent$Values = c(CISSP_ACC1,TCISSP_ACC1,CISSP_ACC2,TCISSP_ACC2,100,100)
+colnames(CISSP_percent)= c("Cluster","Method","Values")
+CISSP_percent$Cluster=as.factor(CISSP_percent$Cluster)
+CISSP_percent$Method = as.factor(CISSP_percent$Method)
+# Grouped Bar Plot
+ggplot(CISSP_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+GCFA
+```{r}
+#GCFA
+GCFA= as.data.frame(Ratio$giac.certified.forensics.analyst)
+colnames(GCFA) = "Exists_spreadsheets"
+GCFA$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+GCFA_Cluster1= as.data.frame(intersect(GCFA$CourseName, dfJ$Coursename))
+colnames(GCFA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(GCFA_Cluster1$Intersections,GCFA$CourseName)
+TrnQ= GCFA[Trn,]
+GCFA_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(GCFA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+GCFA_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Forensics Analyst"
+GCFA_Cluster1 = transform(GCFA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCFA_Cluster1$Verdict = ifelse(GCFA_Cluster1$Exists_Spreadsheets == "TRUE"& GCFA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCFA_Cluster1$Exists_Spreadsheets == "TRUE"& GCFA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCFA_Cluster1$Exists_Spreadsheets == "FALSE"& GCFA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCFA_Cluster1$Exists_Spreadsheets == "FALSE"& GCFA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCFA_ACC1 = ((length(GCFA_Cluster1$Verdict[GCFA_Cluster1$Verdict== "TruePositive"]) + length(GCFA_Cluster1$Verdict[GCFA_Cluster1$Verdict== "TrueNegative"]))/(length(GCFA_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+GCFA_Cluster2= as.data.frame(intersect(GCFA$CourseName, dfJ2$Coursename))
+colnames(GCFA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(GCFA_Cluster2$Intersections,GCFA$CourseName)
+TrnQ2= GCFA[Trn2,]
+GCFA_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(GCFA_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+GCFA_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Forensics Analyst"
+GCFA_Cluster2 = transform(GCFA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCFA_Cluster2$Verdict = ifelse(GCFA_Cluster2$Exists_Spreadsheets == "TRUE"& GCFA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCFA_Cluster2$Exists_Spreadsheets == "TRUE"& GCFA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCFA_Cluster2$Exists_Spreadsheets == "FALSE"& GCFA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCFA_Cluster2$Exists_Spreadsheets == "FALSE"& GCFA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCFA_ACC2 = ((length(GCFA_Cluster2$Verdict[GCFA_Cluster2$Verdict== "TruePositive"]) + length(GCFA_Cluster2$Verdict[GCFA_Cluster2$Verdict== "TrueNegative"]))/(length(GCFA_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TGCFA_Cluster1= as.data.frame(intersect(GCFA$CourseName, TdfJ1$Coursename))
+colnames(TGCFA_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TGCFA_Cluster1$Intersections,GCFA$CourseName)
+TrnQT= GCFA[TrnT,]
+TGCFA_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TGCFA_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TGCFA_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Forensics Analyst"
+TGCFA_Cluster1 = transform(TGCFA_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCFA_Cluster1$Verdict = ifelse(TGCFA_Cluster1$Exists_Spreadsheets == "TRUE"& TGCFA_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCFA_Cluster1$Exists_Spreadsheets == "TRUE"& TGCFA_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCFA_Cluster1$Exists_Spreadsheets == "FALSE"& TGCFA_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCFA_Cluster1$Exists_Spreadsheets == "FALSE"& TGCFA_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCFA_ACC1 = ((length(TGCFA_Cluster1$Verdict[TGCFA_Cluster1$Verdict== "TruePositive"]) + length(TGCFA_Cluster1$Verdict[TGCFA_Cluster1$Verdict== "TrueNegative"]))/(length(TGCFA_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TGCFA_Cluster2= as.data.frame(intersect(GCFA$CourseName, TdfJ2$Coursename))
+colnames(TGCFA_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TGCFA_Cluster2$Intersections,GCFA$CourseName)
+TrnQ2T= GCFA[Trn2T,]
+TGCFA_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TGCFA_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TGCFA_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Forensics Analyst"
+TGCFA_Cluster2 = transform(TGCFA_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCFA_Cluster2$Verdict = ifelse(TGCFA_Cluster2$Exists_Spreadsheets == "TRUE"& TGCFA_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCFA_Cluster2$Exists_Spreadsheets == "TRUE"& TGCFA_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCFA_Cluster2$Exists_Spreadsheets == "FALSE"& TGCFA_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCFA_Cluster2$Exists_Spreadsheets == "FALSE"& TGCFA_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCFA_ACC2 = ((length(TGCFA_Cluster2$Verdict[TGCFA_Cluster2$Verdict== "TruePositive"]) + length(TGCFA_Cluster2$Verdict[TGCFA_Cluster2$Verdict== "TrueNegative"]))/(length(TGCFA_Cluster2$Verdict))) * 100
+#accuracy
+GCFA_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+GCFA_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+GCFA_percent$Values = c(GCFA_ACC1,TGCFA_ACC1,GCFA_ACC2,TGCFA_ACC2,100,100)
+colnames(GCFA_percent)= c("Cluster","Method","Values")
+GCFA_percent$Cluster=as.factor(GCFA_percent$Cluster)
+GCFA_percent$Method = as.factor(GCFA_percent$Method)
+# Grouped Bar Plot
+ggplot(GCFA_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+GCIH
+```{r}
+#GCIH
+GCIH= as.data.frame(Ratio$giac.certified.incident.handler)
+colnames(GCIH) = "Exists_spreadsheets"
+GCIH$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+GCIH_Cluster1= as.data.frame(intersect(GCIH$CourseName, dfJ$Coursename))
+colnames(GCIH_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(GCIH_Cluster1$Intersections,GCIH$CourseName)
+TrnQ= GCIH[Trn,]
+GCIH_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(GCIH_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+GCIH_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Incident Handler"
+GCIH_Cluster1 = transform(GCIH_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCIH_Cluster1$Verdict = ifelse(GCIH_Cluster1$Exists_Spreadsheets == "TRUE"& GCIH_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCIH_Cluster1$Exists_Spreadsheets == "TRUE"& GCIH_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCIH_Cluster1$Exists_Spreadsheets == "FALSE"& GCIH_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCIH_Cluster1$Exists_Spreadsheets == "FALSE"& GCIH_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCIH_ACC1 = ((length(GCIH_Cluster1$Verdict[GCIH_Cluster1$Verdict== "TruePositive"]) + length(GCIH_Cluster1$Verdict[GCIH_Cluster1$Verdict== "TrueNegative"]))/(length(GCIH_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+GCIH_Cluster2= as.data.frame(intersect(GCIH$CourseName, dfJ2$Coursename))
+colnames(GCIH_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(GCIH_Cluster2$Intersections,GCIH$CourseName)
+TrnQ2= GCIH[Trn2,]
+GCIH_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(GCIH_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+GCIH_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Incident Handler"
+GCIH_Cluster2 = transform(GCIH_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCIH_Cluster2$Verdict = ifelse(GCIH_Cluster2$Exists_Spreadsheets == "TRUE"& GCIH_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCIH_Cluster2$Exists_Spreadsheets == "TRUE"& GCIH_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCIH_Cluster2$Exists_Spreadsheets == "FALSE"& GCIH_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCIH_Cluster2$Exists_Spreadsheets == "FALSE"& GCIH_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCIH_ACC2 = ((length(GCIH_Cluster2$Verdict[GCIH_Cluster2$Verdict== "TruePositive"]) + length(GCIH_Cluster2$Verdict[GCIH_Cluster2$Verdict== "TrueNegative"]))/(length(GCIH_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TGCIH_Cluster1= as.data.frame(intersect(GCIH$CourseName, TdfJ1$Coursename))
+colnames(TGCIH_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TGCIH_Cluster1$Intersections,GCIH$CourseName)
+TrnQT= GCIH[TrnT,]
+TGCIH_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TGCIH_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TGCIH_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Incident Handler"
+TGCIH_Cluster1 = transform(TGCIH_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCIH_Cluster1$Verdict = ifelse(TGCIH_Cluster1$Exists_Spreadsheets == "TRUE"& TGCIH_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCIH_Cluster1$Exists_Spreadsheets == "TRUE"& TGCIH_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCIH_Cluster1$Exists_Spreadsheets == "FALSE"& TGCIH_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCIH_Cluster1$Exists_Spreadsheets == "FALSE"& TGCIH_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCIH_ACC1 = ((length(TGCIH_Cluster1$Verdict[TGCIH_Cluster1$Verdict== "TruePositive"]) + length(TGCIH_Cluster1$Verdict[TGCIH_Cluster1$Verdict== "TrueNegative"]))/(length(TGCIH_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TGCIH_Cluster2= as.data.frame(intersect(GCIH$CourseName, TdfJ2$Coursename))
+colnames(TGCIH_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TGCIH_Cluster2$Intersections,GCIH$CourseName)
+TrnQ2T= GCIH[Trn2T,]
+TGCIH_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TGCIH_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TGCIH_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Incident Handler"
+TGCIH_Cluster2 = transform(TGCIH_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCIH_Cluster2$Verdict = ifelse(TGCIH_Cluster2$Exists_Spreadsheets == "TRUE"& TGCIH_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCIH_Cluster2$Exists_Spreadsheets == "TRUE"& TGCIH_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCIH_Cluster2$Exists_Spreadsheets == "FALSE"& TGCIH_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCIH_Cluster2$Exists_Spreadsheets == "FALSE"& TGCIH_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCIH_ACC2 = ((length(TGCIH_Cluster2$Verdict[TGCIH_Cluster2$Verdict== "TruePositive"]) + length(TGCIH_Cluster2$Verdict[TGCIH_Cluster2$Verdict== "TrueNegative"]))/(length(TGCIH_Cluster2$Verdict))) * 100
+#accuracy
+GCIH_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+GCIH_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+GCIH_percent$Values = c(GCIH_ACC1,TGCIH_ACC1,GCIH_ACC2,TGCIH_ACC2,100,100)
+colnames(GCIH_percent)= c("Cluster","Method","Values")
+GCIH_percent$Cluster=as.factor(GCIH_percent$Cluster)
+GCIH_percent$Method = as.factor(GCIH_percent$Method)
+# Grouped Bar Plot
+ggplot(GCIH_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+GCPT
+```{r}
+#GCPT
+GCPT= as.data.frame(Ratio$giac.certified.penetration.tester)
+colnames(GCPT) = "Exists_spreadsheets"
+GCPT$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+GCPT_Cluster1= as.data.frame(intersect(GCPT$CourseName, dfJ$Coursename))
+colnames(GCPT_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(GCPT_Cluster1$Intersections,GCPT$CourseName)
+TrnQ= GCPT[Trn,]
+GCPT_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(GCPT_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+GCPT_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Penetration Tester"
+GCPT_Cluster1 = transform(GCPT_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCPT_Cluster1$Verdict = ifelse(GCPT_Cluster1$Exists_Spreadsheets == "TRUE"& GCPT_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCPT_Cluster1$Exists_Spreadsheets == "TRUE"& GCPT_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCPT_Cluster1$Exists_Spreadsheets == "FALSE"& GCPT_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCPT_Cluster1$Exists_Spreadsheets == "FALSE"& GCPT_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCPT_ACC1 = ((length(GCPT_Cluster1$Verdict[GCPT_Cluster1$Verdict== "TruePositive"]) + length(GCPT_Cluster1$Verdict[GCPT_Cluster1$Verdict== "TrueNegative"]))/(length(GCPT_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+GCPT_Cluster2= as.data.frame(intersect(GCPT$CourseName, dfJ2$Coursename))
+colnames(GCPT_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(GCPT_Cluster2$Intersections,GCPT$CourseName)
+TrnQ2= GCPT[Trn2,]
+GCPT_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(GCPT_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+GCPT_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Penetration Tester"
+GCPT_Cluster2 = transform(GCPT_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+GCPT_Cluster2$Verdict = ifelse(GCPT_Cluster2$Exists_Spreadsheets == "TRUE"& GCPT_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(GCPT_Cluster2$Exists_Spreadsheets == "TRUE"& GCPT_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(GCPT_Cluster2$Exists_Spreadsheets == "FALSE"& GCPT_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(GCPT_Cluster2$Exists_Spreadsheets == "FALSE"& GCPT_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+GCPT_ACC2 = ((length(GCPT_Cluster2$Verdict[GCPT_Cluster2$Verdict== "TruePositive"]) + length(GCPT_Cluster2$Verdict[GCPT_Cluster2$Verdict== "TrueNegative"]))/(length(GCPT_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TGCPT_Cluster1= as.data.frame(intersect(GCPT$CourseName, TdfJ1$Coursename))
+colnames(TGCPT_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TGCPT_Cluster1$Intersections,GCPT$CourseName)
+TrnQT= GCPT[TrnT,]
+TGCPT_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TGCPT_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TGCPT_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Penetration Tester"
+TGCPT_Cluster1 = transform(TGCPT_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCPT_Cluster1$Verdict = ifelse(TGCPT_Cluster1$Exists_Spreadsheets == "TRUE"& TGCPT_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCPT_Cluster1$Exists_Spreadsheets == "TRUE"& TGCPT_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCPT_Cluster1$Exists_Spreadsheets == "FALSE"& TGCPT_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCPT_Cluster1$Exists_Spreadsheets == "FALSE"& TGCPT_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCPT_ACC1 = ((length(TGCPT_Cluster1$Verdict[TGCPT_Cluster1$Verdict== "TruePositive"]) + length(TGCPT_Cluster1$Verdict[TGCPT_Cluster1$Verdict== "TrueNegative"]))/(length(TGCPT_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TGCPT_Cluster2= as.data.frame(intersect(GCPT$CourseName, TdfJ2$Coursename))
+colnames(TGCPT_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TGCPT_Cluster2$Intersections,GCPT$CourseName)
+TrnQ2T= GCPT[Trn2T,]
+TGCPT_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TGCPT_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TGCPT_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "GIAC Certified Penetration Tester"
+TGCPT_Cluster2 = transform(TGCPT_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TGCPT_Cluster2$Verdict = ifelse(TGCPT_Cluster2$Exists_Spreadsheets == "TRUE"& TGCPT_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TGCPT_Cluster2$Exists_Spreadsheets == "TRUE"& TGCPT_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TGCPT_Cluster2$Exists_Spreadsheets == "FALSE"& TGCPT_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TGCPT_Cluster2$Exists_Spreadsheets == "FALSE"& TGCPT_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TGCPT_ACC2 = ((length(TGCPT_Cluster2$Verdict[TGCPT_Cluster2$Verdict== "TruePositive"]) + length(TGCPT_Cluster2$Verdict[TGCPT_Cluster2$Verdict== "TrueNegative"]))/(length(TGCPT_Cluster2$Verdict))) * 100
+#accuracy
+GCPT_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+GCPT_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+GCPT_percent$Values = c(GCPT_ACC1,TGCPT_ACC1,GCPT_ACC2,TGCPT_ACC2,100,100)
+colnames(GCPT_percent)= c("Cluster","Method","Values")
+GCPT_percent$Cluster=as.factor(GCPT_percent$Cluster)
+GCPT_percent$Method = as.factor(GCPT_percent$Method)
+# Grouped Bar Plot
+ggplot(GCPT_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+SecP
+```{r}
+#GCPT
+SecP= as.data.frame(Ratio$security.)
+colnames(SecP) = "Exists_spreadsheets"
+SecP$CourseName = rownames(Ratio)
+
+##########################################cluster1##############################################
+SecP_Cluster1= as.data.frame(intersect(SecP$CourseName, dfJ$Coursename))
+colnames(SecP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn = match(SecP_Cluster1$Intersections,SecP$CourseName)
+TrnQ= SecP[Trn,]
+SecP_Cluster1$Exists_Spreadsheets = TrnQ$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert = match(SecP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_cert= dfJ[Trn_cert,]
+SecP_Cluster1$Certifications = TrnQ_cert$Certifications
+
+#find exists_algorithm
+str = "Security+"
+SecP_Cluster1 = transform(SecP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+SecP_Cluster1$Verdict = ifelse(SecP_Cluster1$Exists_Spreadsheets == "TRUE"& SecP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(SecP_Cluster1$Exists_Spreadsheets == "TRUE"& SecP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(SecP_Cluster1$Exists_Spreadsheets == "FALSE"& SecP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(SecP_Cluster1$Exists_Spreadsheets == "FALSE"& SecP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+SecP_ACC1 = ((length(SecP_Cluster1$Verdict[SecP_Cluster1$Verdict== "TruePositive"]) + length(SecP_Cluster1$Verdict[SecP_Cluster1$Verdict== "TrueNegative"]))/(length(SecP_Cluster1$Verdict))) * 100
+
+##########################################cluster2##############################################
+SecP_Cluster2= as.data.frame(intersect(SecP$CourseName, dfJ2$Coursename))
+colnames(SecP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2 = match(SecP_Cluster2$Intersections,SecP$CourseName)
+TrnQ2= SecP[Trn2,]
+SecP_Cluster2$Exists_Spreadsheets = TrnQ2$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2 = match(SecP_Cluster2$Intersections,dfJ2$Coursename)
+TrnQ_cert2= dfJ2[Trn_cert2,]
+SecP_Cluster2$Certifications = TrnQ_cert2$Certifications
+
+#find exists_algorithm
+str = "Security+"
+SecP_Cluster2 = transform(SecP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+SecP_Cluster2$Verdict = ifelse(SecP_Cluster2$Exists_Spreadsheets == "TRUE"& SecP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(SecP_Cluster2$Exists_Spreadsheets == "TRUE"& SecP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(SecP_Cluster2$Exists_Spreadsheets == "FALSE"& SecP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(SecP_Cluster2$Exists_Spreadsheets == "FALSE"& SecP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+SecP_ACC2 = ((length(SecP_Cluster2$Verdict[SecP_Cluster2$Verdict== "TruePositive"]) + length(SecP_Cluster2$Verdict[SecP_Cluster2$Verdict== "TrueNegative"]))/(length(SecP_Cluster2$Verdict))) * 100
+
+##########################################Tcluster1##############################################
+TSecP_Cluster1= as.data.frame(intersect(SecP$CourseName, TdfJ1$Coursename))
+colnames(TSecP_Cluster1) = "Intersections"
+
+#match and bring exists spreadsheet value
+TrnT = match(TSecP_Cluster1$Intersections,SecP$CourseName)
+TrnQT= SecP[TrnT,]
+TSecP_Cluster1$Exists_Spreadsheets = TrnQT$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_certT = match(TSecP_Cluster1$Intersections,dfJ$Coursename)
+TrnQ_certT= dfJ[Trn_certT,]
+TSecP_Cluster1$Certifications = TrnQ_certT$Certifications
+
+#find exists_algorithm
+str = "Security+"
+TSecP_Cluster1 = transform(TSecP_Cluster1, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TSecP_Cluster1$Verdict = ifelse(TSecP_Cluster1$Exists_Spreadsheets == "TRUE"& TSecP_Cluster1$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TSecP_Cluster1$Exists_Spreadsheets == "TRUE"& TSecP_Cluster1$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TSecP_Cluster1$Exists_Spreadsheets == "FALSE"& TSecP_Cluster1$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TSecP_Cluster1$Exists_Spreadsheets == "FALSE"& TSecP_Cluster1$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TSecP_ACC1 = ((length(TSecP_Cluster1$Verdict[TSecP_Cluster1$Verdict== "TruePositive"]) + length(TSecP_Cluster1$Verdict[TSecP_Cluster1$Verdict== "TrueNegative"]))/(length(TSecP_Cluster1$Verdict))) * 100
+
+##########################################Tcluster2##############################################
+TSecP_Cluster2= as.data.frame(intersect(SecP$CourseName, TdfJ2$Coursename))
+colnames(TSecP_Cluster2) = "Intersections"
+
+#match and bring exists spreadsheet value
+Trn2T = match(TSecP_Cluster2$Intersections,SecP$CourseName)
+TrnQ2T= SecP[Trn2T,]
+TSecP_Cluster2$Exists_Spreadsheets = TrnQ2T$Exists_spreadsheets
+
+#Bring the certification of each coursename
+Trn_cert2T = match(TSecP_Cluster2$Intersections,TdfJ2$Coursename)
+TrnQ_cert2T= TdfJ2[Trn_cert2T,]
+TSecP_Cluster2$Certifications = TrnQ_cert2T$Certifications
+
+#find exists_algorithm
+str = "Security+"
+TSecP_Cluster2 = transform(TSecP_Cluster2, Exists_Algorithm=mapply(grepl, pattern=str, x=Certifications) & nzchar(str))
+
+#compare table
+TSecP_Cluster2$Verdict = ifelse(TSecP_Cluster2$Exists_Spreadsheets == "TRUE"& TSecP_Cluster2$Exists_Algorithm == "TRUE","TruePositive",
+                           ifelse(TSecP_Cluster2$Exists_Spreadsheets == "TRUE"& TSecP_Cluster2$Exists_Algorithm == "FALSE","FalsePositive",
+                                  ifelse(TSecP_Cluster2$Exists_Spreadsheets == "FALSE"& TSecP_Cluster2$Exists_Algorithm == "FALSE","TrueNegative",
+                                         ifelse(TSecP_Cluster2$Exists_Spreadsheets == "FALSE"& TSecP_Cluster2$Exists_Algorithm == "TRUE","FalseNegative",0))))
+
+TSecP_ACC2 = ((length(TSecP_Cluster2$Verdict[TSecP_Cluster2$Verdict== "TruePositive"]) + length(TSecP_Cluster2$Verdict[TSecP_Cluster2$Verdict== "TrueNegative"]))/(length(TSecP_Cluster2$Verdict))) * 100
+#accuracy
+SecP_percent = data.frame(c("Cluster1","Cluster1","Cluster2","Cluster2","Max","Max"))
+SecP_percent$Method = c("Matching","TF_IDF","Matching","TF_IDF","Matching","TF_IDF")
+SecP_percent$Values = c(SecP_ACC1,TSecP_ACC1,SecP_ACC2,TSecP_ACC2,100,100)
+colnames(SecP_percent)= c("Cluster","Method","Values")
+SecP_percent$Cluster=as.factor(SecP_percent$Cluster)
+SecP_percent$Method = as.factor(SecP_percent$Method)
+# Grouped Bar Plot
+ggplot(SecP_percent, aes(fill=Cluster, y=Values, x=Method, main = "Pecentage accuracy")) + 
+    geom_bar(position="dodge", stat="identity")
+```
+save image
+```{r}
+#save because it takes too long to run
+save.image('Cimage.RData')
+
+```
+
+```{r}
+#Graph to show the accuracies across each certification in each cluster and each method
+d = as.data.frame(df2$Name)
+colnames(d) = "Name"
+FullAccuracy = as.data.frame(d[rep(seq_len(nrow(d)), 4), ])
+colnames(FullAccuracy) = "Certifications"
+
+FullAccuracy$Cluster = NA
+FullAccuracy$Cluster[1:11] = "Cluster1M"
+FullAccuracy$Cluster[12:22] = "Cluster1T"
+FullAccuracy$Cluster[23:33] = "Cluster2M"
+FullAccuracy$Cluster[34:44] ="Cluster2T"
+Abbv = data.frame(c("CASP","CCSP","CEH","CISM","CISA","CISSP","CCNA","GCFA","GCIH","GCPT","SEC+"))
+colnames(Abbv) = "abbv"
+FullAccuracy$Abbrevation = Abbv[rep(seq_len(nrow(Abbv)),4),]
+
+FullAccuracy$Values[1:44] =round(c(TCASP_ACC1,TCCSP_ACC1,TCEH_ACC1,TCISM_ACC1,TCISA_ACC1,TCISSP_ACC1,TCCNA_ACC1,TGCFA_ACC1,TGCIH_ACC1,TGCPT_ACC1,TSecP_ACC1,
+                                   CASP_ACC1,CCSP_ACC1,CEH_ACC1,CISM_ACC1,CISA_ACC1,CISSP_ACC1,CCNA_ACC1,GCFA_ACC1,GCIH_ACC1,GCPT_ACC1,SecP_ACC1,
+                                   TCASP_ACC2,TCCSP_ACC2,TCEH_ACC2,TCISM_ACC2,TCISA_ACC2,TCISSP_ACC2,TCCNA_ACC2,TGCFA_ACC2,TGCIH_ACC2,TGCPT_ACC2,TSecP_ACC2,
+                                   CASP_ACC2,CCSP_ACC2,CEH_ACC2,CISM_ACC2,CISA_ACC2,CISSP_ACC2,CCNA_ACC2,GCFA_ACC2,GCIH_ACC2,GCPT_ACC2,SecP_ACC2
+                                   ),1)
+
+#plot graph
+empty_bar <- 4
+to_add <- data.frame( matrix(NA, empty_bar*nlevels(FullAccuracy$Cluster), ncol(FullAccuracy)) )
+colnames(to_add) <- colnames(FullAccuracy)
+to_add$Cluster <- rep(levels(FullAccuracy$Cluster), each=empty_bar)
+data <- rbind(FullAccuracy, to_add)
+#library(dplyr)
+data <- data %>% arrange(Cluster,Values)
+data$id <- seq(1, nrow(data))
+
+
+# Get the name and the y position of each label
+label_data <- data
+number_of_bar <- nrow(label_data)
+angle <- 90 - 360 * (label_data$id-0.5) /number_of_bar     # I substract 0.5 because the letter must have the angle of the center of the bars. Not extreme right(1) or extreme left (0)
+label_data$hjust <- ifelse( angle < -90, 1, 0)
+label_data$angle <- ifelse(angle < -90, angle+180, angle)
+
+###
+ggplot(data, aes(x=as.factor(id), y=Values, fill=Cluster)) +       # Note that id is a factor. If x is numeric, there is some space between the first bar
+  geom_bar(stat="identity", alpha=0.5) +
+ # facet_wrap(~Cluster)+
+  ylim(-100,120) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+   plot.margin = unit(rep(-1,4), "cm") 
+  ) +
+  coord_polar() + 
+  #facet_wrap(~Cluster)+
+  geom_text(data=label_data, aes(x=id, y=Values+10, label=Abbrevation, hjust=hjust), color="black", fontface="bold",alpha=0.6, size=2.5, angle= label_data$angle, inherit.aes = FALSE ) 
+
+#########################OR
+
+# prepare a data frame for base lines
+base_data <- data %>% 
+  group_by(Cluster) %>% 
+  summarize(start=min(id), end=max(id) - empty_bar) %>% 
+  rowwise() %>% 
+  mutate(title=mean(c(start, end)))
+ 
+# prepare a data frame for grid (scales)
+grid_data <- base_data
+grid_data$end <- grid_data$end[ c( nrow(grid_data), 1:nrow(grid_data)-1)] + 1
+grid_data$start <- grid_data$start - 1
+grid_data <- grid_data[-1,]
+ 
+# Make the plot
+ggplot(data, aes(x=as.factor(id), y=Values, fill=Cluster)) +       # Note that id is a factor. If x is numeric, there is some space between the first bar
+  
+  geom_bar(aes(x=as.factor(id), y=Values, fill=Cluster), stat="identity", alpha=0.5) +
+  
+  # Add a val=100/75/50/25 lines. I do it at the beginning to make sur barplots are OVER it.
+  geom_segment(data=grid_data, aes(x = end, y = 80, xend = start, yend = 80), colour = "black", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid_data, aes(x = end, y = 60, xend = start, yend = 60), colour = "black", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid_data, aes(x = end, y = 40, xend = start, yend = 40), colour = "black", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid_data, aes(x = end, y = 20, xend = start, yend = 20), colour = "black", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  
+  # Add text showing the value of each 100/75/50/25 lines
+  annotate("text", x = rep(max(data$id),4), y = c(20, 40, 60, 80), label = c("20", "40", "60", "80") , color="black", size=3 , angle=0, fontface="bold", hjust=1) +
+  
+  geom_bar(aes(x=as.factor(id), y=Values, fill=Cluster), stat="identity", alpha=0.5) +
+  ylim(-100,120) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.margin = unit(rep(-1,4), "cm") 
+  ) +
+  coord_polar() + 
+  geom_text(data=label_data, aes(x=id, y=Values+10, label=Abbrevation, hjust=hjust), color="black", fontface="bold",alpha=0.6, size=2.5, angle= label_data$angle, inherit.aes = FALSE ) +
+  
+  # Add base line information
+  geom_segment(data=base_data, aes(x = start, y = -5, xend = end, yend = -5), colour = "black", alpha=0.8, size=0.6 , inherit.aes = FALSE )  +
+  geom_text(data=base_data, aes(x = title, y = -18, label=Cluster), hjust=c(1,1,0,0), colour = "black", alpha=0.8, size=4, fontface="bold", inherit.aes = FALSE)
+
+```
